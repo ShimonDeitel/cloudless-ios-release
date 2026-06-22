@@ -145,7 +145,7 @@ struct GridView: View {
                     .onChanged { value in
                         // Only allow upward drag
                         swipeOffset = min(0, value.translation.height)
-                        swipeOpacity = max(0, 1 + swipeOffset / 200)
+                        swipeOpacity = max(0, 1 + Double(swipeOffset) / 200)
                     }
                     .onEnded { value in
                         if value.translation.height < -80 {
