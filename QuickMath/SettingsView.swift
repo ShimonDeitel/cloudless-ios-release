@@ -1,122 +1,149 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @EnvironmentObject var appModel: AppModel
     @EnvironmentObject var store: Store
+    @EnvironmentObject var appModel: AppModel
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("quickmath.theme") private var themeRaw = AppTheme.system.rawValue
-    @AppStorage("quickmath.reminderOn") private var reminderOn = false
-    @AppStorage("quickmath.reminderHour") private var reminderHour = 9
-    @AppStorage("quickmath.reminderMinute") private var reminderMinute = 0
-
     @State private var showPaywall = false
     @State private var showDeleteConfirm = false
-    @State private var restoreMessage: String?
-
-    private var version: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        return "Lattice \(v)"
-    }
-
-    private var reminderTime: Binding<Date> {
-        Binding(
-            get: { Calendar.current.date(from: DateComponents(hour: reminderHour, minute: reminderMinute)) ?? Date() },
-            set: { newValue in
-                let c = Calendar.current.dateComponents([.hour, .minute], from: newValue)
-                reminderHour = c.hour ?? 9
-                reminderMinute = c.minute ?? 0
-                if reminderOn { Reminders.schedule(hour: reminderHour, minute: reminderMinute) }
-            }
-        )
-    }
 
     var body: some View {
         NavigationStack {
-            Form {
-                proSection
-                appearanceSection
-                gridSection
-                aboutSection
+            ZStack {
+                QMBackground()
+                List {
+                    // MARK: Pro section
+                    Section("Cloudless Pro") {
+                        if store.isPro {
+                            HStack {
+                                Text("Status")
+                                Spacer()
+                                Text("Active")
+                                    .foregroundStyle(Color.qmCorrect)
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            Link("Manage Subscription",
+                                 destination: URL(string: "https://apps.apple.com/account/subscriptions")!)
+                                .foregroundStyle(Color.qmAccent)
+                        } else {
+                            Button("Unlock Cloudless Pro — \(store.displayPrice)/mo") {
+                                showPaywall = true
+                            }
+                            .foregroundStyle(Color.qmAccent)
+
+                            Button("Restore Purchases") {
+                                Task { await store.restore() }
+                            }
+                            .foregroundStyle(Color.qmAccent)
+                        }
+                    }
+
+                    // MARK: Appearance
+                    Section("Appearance") {
+                        Picker("Theme", selection: $themeRaw) {
+                            ForEach(AppTheme.allCases) { theme in
+                                Text(theme.label).tag(theme.rawValue)
+                            }
+                        }
+                    }
+
+                    // MARK: Notifications (Pro)
+                    Section("Reminders") {
+                        if store.isPro {
+                            ReminderToggleRow()
+                        } else {
+                            HStack {
+                                Text("Evening Reminder")
+                                Spacer()
+                                Text("Pro")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(Color.qmAccent, in: Capsule())
+                            }
+                        }
+                    }
+
+                    // MARK: Links
+                    Section("Legal") {
+                        Link("Privacy Policy",
+                             destination: URL(string: "https://shimondeitel.github.io/cloudless-site/privacy.html")!)
+                            .foregroundStyle(Color.qmAccent)
+                        Link("Terms of Use",
+                             destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
+                            .foregroundStyle(Color.qmAccent)
+                    }
+
+                    // MARK: Data
+                    Section {
+                        Button(role: .destructive) {
+                            showDeleteConfirm = true
+                        } label: {
+                            Text("Delete All Data")
+                        }
+                    }
+                }
+                .listStyle(.insetGrouped)
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
-            .tint(Color.qmAccent)
-            .sheet(isPresented: $showPaywall) { PaywallView() }
-            .alert("Erase Progress?", isPresented: $showDeleteConfirm) {
-                Button("Erase", role: .destructive) { appModel.deleteAllData(); dismiss() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This permanently erases your solved grids and streak on this device. This can't be undone.")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(Color.qmAccent)
+                }
             }
         }
+        .sheet(isPresented: $showPaywall) { PaywallView() }
+        .confirmationDialog("Delete all worries and data?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete All", role: .destructive) {
+                appModel.deleteAllData()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone.")
+        }
     }
+}
 
-    @ViewBuilder
-    private var proSection: some View {
-        Section {
-            if store.isPro {
-                HStack {
-                    Label("Lattice Pro", systemImage: "sparkles")
-                    Spacer(); Text("Active").foregroundStyle(.secondary)
-                }
-            } else {
-                Button { Haptics.tap(); showPaywall = true } label: {
-                    HStack {
-                        Label("Start Lattice Pro", systemImage: "sparkles")
-                        Spacer(); Text("\(store.displayPrice)/mo").foregroundStyle(.secondary)
-                    }
-                }
-                Button("Restore Purchase") {
+// MARK: - Reminder toggle (Pro only)
+
+private struct ReminderToggleRow: View {
+    @State private var enabled = false
+    @State private var hour = 20
+    @State private var minute = 0
+
+    var body: some View {
+        Toggle("Evening Reminder", isOn: $enabled)
+            .onChange(of: enabled) { _, newVal in
+                if newVal {
                     Task {
-                        await store.restore()
-                        restoreMessage = store.isPro ? "Restored." : "No active subscription found."
-                    }
-                }
-                if let restoreMessage { Text(restoreMessage).font(.footnote).foregroundStyle(.secondary) }
-            }
-        } footer: {
-            if !store.isPro {
-                Text("$0.99/month subscription. The expert daily grid, the full archive of past grids, hints and themes. Auto-renews until canceled.")
-            }
-        }
-    }
-
-    private var appearanceSection: some View {
-        Section("Appearance") {
-            Picker("Theme", selection: $themeRaw) {
-                ForEach(AppTheme.allCases) { Text($0.label).tag($0.rawValue) }
-            }
-            .pickerStyle(.segmented)
-        }
-    }
-
-    private var gridSection: some View {
-        Section("Daily grid") {
-            Toggle("Daily reminder", isOn: $reminderOn)
-                .onChange(of: reminderOn) { _, on in
-                    if on {
-                        Task {
-                            let granted = await Reminders.requestAuthorization()
-                            if granted { Reminders.schedule(hour: reminderHour, minute: reminderMinute) }
-                            else { reminderOn = false }
+                        let granted = await Reminders.requestAuthorization()
+                        if granted {
+                            Reminders.schedule(hour: hour, minute: minute)
+                        } else {
+                            enabled = false
                         }
-                    } else { Reminders.cancel() }
+                    }
+                } else {
+                    Reminders.cancel()
                 }
-            if reminderOn {
-                DatePicker("Time", selection: reminderTime, displayedComponents: .hourAndMinute)
             }
-        }
-    }
-
-    private var aboutSection: some View {
-        Section {
-            Button("Erase Progress", role: .destructive) { showDeleteConfirm = true }
-            Link("Terms of Use", destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
-            Link("Privacy Policy", destination: URL(string: "https://shimondeitel.github.io/lattice-site/privacy.html")!)
-        } footer: {
-            Text(version).frame(maxWidth: .infinity, alignment: .center).padding(.top, 4)
+        if enabled {
+            DatePicker("Time", selection: Binding(
+                get: {
+                    var c = DateComponents(); c.hour = hour; c.minute = minute
+                    return Calendar.current.date(from: c) ?? Date()
+                },
+                set: { d in
+                    let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+                    hour = c.hour ?? 20; minute = c.minute ?? 0
+                    Reminders.schedule(hour: hour, minute: minute)
+                }
+            ), displayedComponents: .hourAndMinute)
         }
     }
 }

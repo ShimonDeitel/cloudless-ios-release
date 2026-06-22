@@ -1,161 +1,211 @@
 import SwiftUI
 
-/// The player: a one-to-one matching grid (people × an ordered attribute). Read the clues, tap
-/// cells to mark ✓ / ✗, and solve. Placing a ✓ auto-crosses the rest of its row and column.
+/// Primary worry-entry screen. User types their worry, then swipes the cloud away.
 struct GridView: View {
-    let puzzle: Puzzle
-    var isExpert: Bool = false
-
     @EnvironmentObject var appModel: AppModel
-    @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
 
-    @StateObject private var grid: GridState
-    @State private var elapsed = 0
-    @State private var solved = false
-    @State private var wrongShake = false
-    @State private var showResult = false
+    @State private var worryText = ""
+    @State private var phase: Phase = .write
+    @State private var swipeOffset: CGFloat = 0
+    @State private var swipeOpacity: Double = 1
 
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-
-    init(puzzle: Puzzle, isExpert: Bool = false) {
-        self.puzzle = puzzle
-        self.isExpert = isExpert
-        _grid = StateObject(wrappedValue: GridState(puzzle))
-    }
-
-    private var cell: CGFloat { puzzle.size >= 6 ? 38 : 44 }
-    private let nameW: CGFloat = 74
+    private enum Phase { case write, swipe, done }
 
     var body: some View {
-        NavigationStack {
+        ZStack {
+            QMBackground()
+
+            VStack(spacing: 0) {
+                // Navigation bar
+                HStack {
+                    Button("Cancel") { dismiss() }
+                        .font(.body)
+                        .foregroundStyle(Color.qmAccent)
+                    Spacer()
+                    Text(phase == .write ? "Today's Worry" : phase == .swipe ? "Let Go" : "Released")
+                        .font(.headline)
+                    Spacer()
+                    // Balance cancel button
+                    Color.clear.frame(width: 55, height: 1)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 20)
+
+                Spacer()
+
+                switch phase {
+                case .write:
+                    writePhase
+                case .swipe:
+                    swipePhase
+                case .done:
+                    donePhase
+                }
+
+                Spacer()
+            }
+        }
+    }
+
+    // MARK: - Write phase
+
+    private var writePhase: some View {
+        VStack(spacing: 28) {
+            Image(systemName: "cloud")
+                .font(.system(size: 80, weight: .thin))
+                .foregroundStyle(Color.qmAccent)
+
+            VStack(spacing: 10) {
+                Text("What's worrying you today?")
+                    .font(.title3.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                Text("Write it down — name it to tame it.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.qmCard)
+                if worryText.isEmpty {
+                    Text("e.g. I might mess up the presentation...")
+                        .foregroundStyle(.tertiary)
+                        .font(.body)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 12)
+                }
+                TextEditor(text: $worryText)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                    .padding(8)
+            }
+            .frame(height: 120)
+            .padding(.horizontal, 24)
+
+            Button("Put it on a cloud") {
+                guard !worryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                Haptics.tap()
+                appModel.saveWorry(text: worryText.trimmingCharacters(in: .whitespacesAndNewlines))
+                withAnimation(.easeInOut(duration: 0.3)) { phase = .swipe }
+            }
+            .prominentButton()
+            .disabled(worryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .opacity(worryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
+        }
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - Swipe phase
+
+    private var swipePhase: some View {
+        VStack(spacing: 32) {
+            Text("Swipe to release")
+                .font(.title3.weight(.semibold))
+            Text("This worry no longer needs to\nlive in your head right now.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            // Cloud card with gesture
             ZStack {
-                QMBackground()
-                ScrollView {
-                    VStack(spacing: 20) {
-                        timerBar
-                        gridBlock
-                            .modifier(Shake(animatableData: wrongShake ? 1 : 0))
-                        cluesCard
-                        if store.isPro {
-                            Button { Haptics.tap(); grid.revealHint(); evaluate() } label: {
-                                Label("Reveal a hint", systemImage: "lightbulb.fill")
-                                    .frame(maxWidth: .infinity).padding(.vertical, 2)
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(Color.qmCard)
+                    .shadow(color: Color.black.opacity(0.06), radius: 12, y: 4)
+
+                VStack(spacing: 14) {
+                    Image(systemName: "cloud")
+                        .font(.system(size: 56, weight: .thin))
+                        .foregroundStyle(Color.qmAccent)
+                    if let worry = appModel.todaysWorry {
+                        Text(worry.text)
+                            .font(.body)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.primary)
+                    }
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up")
+                            .font(.caption2)
+                        Text("swipe up")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+                }
+                .padding(24)
+            }
+            .padding(.horizontal, 32)
+            .offset(y: swipeOffset)
+            .opacity(swipeOpacity)
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        // Only allow upward drag
+                        swipeOffset = min(0, value.translation.height)
+                        swipeOpacity = max(0, 1 + swipeOffset / 200)
+                    }
+                    .onEnded { value in
+                        if value.translation.height < -80 {
+                            // Dismiss
+                            Haptics.success()
+                            withAnimation(.easeOut(duration: 0.4)) {
+                                swipeOffset = -500
+                                swipeOpacity = 0
                             }
-                            .softButton().disabled(solved)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                                if let worry = appModel.todaysWorry {
+                                    appModel.dismissWorry(worry)
+                                }
+                                withAnimation { phase = .done }
+                            }
+                        } else {
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                                swipeOffset = 0
+                                swipeOpacity = 1
+                            }
                         }
                     }
-                    .padding()
-                    .padding(.bottom, 30)
-                }
-            }
-            .navigationTitle(isExpert ? "Expert Grid" : "Today's Grid")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { dismiss() }.tint(Color.qmAccent)
-                }
-            }
-            .onReceive(timer) { _ in if !solved { elapsed += 1 } }
-            .sheet(isPresented: $showResult) {
-                ResultView(puzzle: puzzle, seconds: elapsed, streak: appModel.currentStreak, isExpert: isExpert) {
-                    showResult = false; dismiss()
-                }
-                .presentationDetents([.medium])
-            }
+            )
         }
+        .padding(.horizontal, 20)
     }
 
-    private var timerBar: some View {
-        HStack {
-            Label(timeString(elapsed), systemImage: "clock").font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text("\(grid.placedCount)/\(puzzle.size) placed").font(.subheadline).foregroundStyle(.secondary)
-        }
-    }
+    // MARK: - Done phase
 
-    private var gridBlock: some View {
-        VStack(spacing: 0) {
-            // Column headers
-            HStack(spacing: 0) {
-                Text(puzzle.colCategory).font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary).frame(width: nameW, height: 46, alignment: .trailing)
-                    .padding(.trailing, 4)
-                ForEach(0..<puzzle.size, id: \.self) { c in
-                    Text(puzzle.cols[c]).font(.system(size: 10, weight: .semibold))
-                        .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
-                        .frame(width: cell, height: 46)
-                }
+    private var donePhase: some View {
+        VStack(spacing: 24) {
+            Image(systemName: "cloud.fill")
+                .font(.system(size: 72, weight: .thin))
+                .foregroundStyle(Color.qmAccent.opacity(0.25))
+                .overlay(
+                    Image(systemName: "wind")
+                        .font(.system(size: 28))
+                        .foregroundStyle(Color.qmAccent)
+                        .offset(x: 12, y: -8)
+                )
+
+            VStack(spacing: 10) {
+                Text("Released")
+                    .font(.title2.weight(.bold))
+                Text("Your worry has drifted off.\nIt no longer has to weigh on you today.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            ForEach(0..<puzzle.size, id: \.self) { r in
-                HStack(spacing: 0) {
-                    Text(puzzle.rows[r]).font(.system(size: 12, weight: .medium))
-                        .lineLimit(1).minimumScaleFactor(0.6)
-                        .frame(width: nameW, height: cell, alignment: .trailing).padding(.trailing, 4)
-                    ForEach(0..<puzzle.size, id: \.self) { c in
-                        cellView(r, c)
-                    }
-                }
+
+            MetricTile(value: "\(appModel.thisWeekReleaseCount)", label: "Released this week")
+                .frame(maxWidth: 200)
+
+            Button("Done") {
+                Haptics.tap()
+                dismiss()
             }
+            .prominentButton()
         }
-        .qmCard(cornerRadius: 16)
-    }
-
-    private func cellView(_ r: Int, _ c: Int) -> some View {
-        Button {
-            guard !solved else { return }
-            Haptics.soft(); grid.cycle(r, c); evaluate()
-        } label: {
-            ZStack {
-                Rectangle().fill(Color.qmCard2)
-                switch grid.marks[r][c] {
-                case .yes: Image(systemName: "checkmark").font(.system(size: cell * 0.42, weight: .bold)).foregroundStyle(Color.qmAccent)
-                case .no:  Image(systemName: "xmark").font(.system(size: cell * 0.34, weight: .semibold)).foregroundStyle(Color.secondary)
-                case .blank: Color.clear
-                }
-            }
-            .frame(width: cell, height: cell)
-            .overlay(Rectangle().stroke(Color.qmHair, lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var cluesCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("CLUES").font(.caption.weight(.semibold)).foregroundStyle(.secondary).tracking(1.5)
-            ForEach(Array(puzzle.clues.enumerated()), id: \.offset) { i, clue in
-                HStack(alignment: .top, spacing: 8) {
-                    Text("\(i + 1).").font(.subheadline.weight(.semibold)).foregroundStyle(Color.qmAccent)
-                    Text(clue).font(.subheadline).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .qmCard()
-    }
-
-    private func evaluate() {
-        guard !solved else { return }
-        if grid.isSolved {
-            solved = true
-            Haptics.success()
-            appModel.record(puzzle: puzzle, solved: true, seconds: Double(elapsed), isExpert: isExpert)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showResult = true }
-        } else if grid.isComplete {
-            Haptics.warning()
-            withAnimation(.default) { wrongShake.toggle() }
-        }
-    }
-
-    private func timeString(_ s: Int) -> String { String(format: "%d:%02d", s / 60, s % 60) }
-}
-
-/// A small horizontal shake for a completed-but-wrong grid.
-struct Shake: GeometryEffect {
-    var animatableData: CGFloat
-    func effectValue(size: CGSize) -> ProjectionTransform {
-        ProjectionTransform(CGAffineTransform(translationX: 8 * sin(animatableData * .pi * 4), y: 0))
+        .padding(.horizontal, 20)
+        .transition(.opacity.combined(with: .scale(scale: 0.95)))
     }
 }

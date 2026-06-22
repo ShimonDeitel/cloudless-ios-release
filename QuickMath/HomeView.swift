@@ -1,165 +1,178 @@
 import SwiftUI
 
-/// The hub: today's logic grid, a Play button, the daily streak, lifetime stats, and Pro entry
-/// points (archive + an expert grid each day).
 struct HomeView: View {
+    var forceScreen: String? = nil
+
     @EnvironmentObject var appModel: AppModel
     @EnvironmentObject var store: Store
 
-    var forceScreen: String? = nil
-
-    @State private var active: PlaySpec?
     @State private var showSettings = false
     @State private var showPaywall = false
-    @State private var showArchive = false
+    @State private var showInsights = false
+    @State private var showGrid = false
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                QMBackground()
+        ZStack {
+            QMBackground()
+            NavigationStack {
                 ScrollView {
-                    VStack(spacing: 22) {
-                        header
+                    VStack(spacing: 24) {
+                        // Header
+                        VStack(spacing: 6) {
+                            Text("Cloudless")
+                                .font(.largeTitle.weight(.bold))
+                            Text("Name today's worry, let go")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 12)
+
+                        // Today's worry status
                         todayCard
-                        statsRow
-                        proRow
+
+                        // Week stats
+                        HStack(spacing: 12) {
+                            MetricTile(value: "\(appModel.thisWeekReleaseCount)", label: "Released this week")
+                            MetricTile(value: "\(appModel.totalResolved)", label: "Total released")
+                        }
+
+                        // Pro card
+                        proCard
+
+                        // Pending reviews (free: teaser)
+                        if !appModel.pendingReview.isEmpty {
+                            reviewTeaser
+                        }
                     }
-                    .padding()
-                    .padding(.bottom, 24)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 32)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button { showSettings = true } label: {
+                            Image(systemName: "gearshape")
+                                .foregroundStyle(Color.qmAccent)
+                        }
+                    }
                 }
             }
-            .navigationTitle("Lattice")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { Haptics.tap(); showSettings = true } label: {
-                        Image(systemName: "gearshape").foregroundStyle(Color.qmAccent)
-                    }
-                    .accessibilityLabel("Settings")
-                }
-            }
-            .tint(Color.qmAccent)
-            .fullScreenCover(item: $active) { spec in
-                GridView(puzzle: spec.puzzle, isExpert: spec.isExpert)
-            }
-            .sheet(isPresented: $showSettings) { SettingsView() }
-            .sheet(isPresented: $showPaywall) { PaywallView() }
-            .sheet(isPresented: $showArchive) { ArchiveView() }
-            .onAppear { appModel.refreshTodayIfNeeded() }
         }
+        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showPaywall) { PaywallView() }
+        .sheet(isPresented: $showInsights) { InsightsView() }
+        .sheet(isPresented: $showGrid) { GridView() }
+        .onAppear { handleForceScreen() }
     }
 
-    private var header: some View {
-        VStack(spacing: 6) {
-            Text(dateHeadline).font(.subheadline).foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                Image(systemName: "flame.fill").foregroundStyle(Color.qmAccent)
-                Text("\(appModel.currentStreak) day streak").font(.headline)
-            }
-        }
-        .padding(.top, 8)
-    }
+    // MARK: - Sub-views
 
-    @ViewBuilder
     private var todayCard: some View {
         VStack(spacing: 16) {
-            Text("TODAY'S GRID")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary).tracking(1.5)
-            if let p = appModel.today {
-                Text("\(p.rows.count) \(p.rowCategory.lowercased())s · \(p.colCategory.lowercased())s")
-                    .font(.headline)
-                Text("Read the clues. Cross out what can't be, mark what must be.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                if appModel.solvedToday {
-                    Label("Solved today", systemImage: "checkmark.seal.fill")
-                        .font(.subheadline).foregroundStyle(Color.qmCorrect)
-                    Button { play(p, expert: false) } label: {
-                        Text("Play Again").frame(maxWidth: .infinity).padding(.vertical, 4)
+            if let worry = appModel.todaysWorry {
+                // Already written today
+                VStack(spacing: 10) {
+                    Image(systemName: "cloud")
+                        .font(.system(size: 48, weight: .thin))
+                        .foregroundStyle(Color.qmAccent)
+                    Text(worry.text)
+                        .font(.body)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.primary)
+                    if worry.resolved == true {
+                        Label("Released", systemImage: "wind")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.qmCorrect)
+                    } else {
+                        Button("Swipe it away") {
+                            Haptics.success()
+                            appModel.dismissWorry(worry)
+                        }
+                        .prominentButton()
                     }
-                    .softButton()
-                } else {
-                    Button { play(p, expert: false) } label: {
-                        Text("Solve Today's Grid").frame(maxWidth: .infinity).padding(.vertical, 4)
+                }
+            } else {
+                // No worry yet
+                VStack(spacing: 12) {
+                    Image(systemName: "cloud.fill")
+                        .font(.system(size: 48, weight: .thin))
+                        .foregroundStyle(Color.qmAccent.opacity(0.3))
+                    Text("What's weighing on you today?")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Button("Name a worry") {
+                        Haptics.tap()
+                        showGrid = true
                     }
                     .prominentButton()
                 }
-            } else {
-                Text("Puzzles unavailable.").font(.subheadline).foregroundStyle(.secondary)
             }
         }
+        .frame(maxWidth: .infinity)
         .qmCard()
     }
 
-    private var statsRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Lifetime").font(.headline)
-            HStack(spacing: 12) {
-                MetricTile(value: "\(appModel.longestStreak)", label: "Best streak")
-                MetricTile(value: "\(appModel.totalSolved)", label: "Solved")
-                MetricTile(value: appModel.bestSeconds > 0 ? timeString(appModel.bestSeconds) : "—", label: "Best time")
+    private var proCard: some View {
+        Button {
+            Haptics.tap()
+            if store.isPro { showInsights = true } else { showPaywall = true }
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.title2)
+                    .foregroundStyle(Color.qmAccent)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(store.isPro ? "Worry Insights" : "Unlock Insights")
+                            .font(.headline)
+                        if store.isPro {
+                            Text("PRO")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(Color.qmAccent, in: Capsule())
+                        }
+                    }
+                    Text(store.isPro ? "See trends, follow-ups & monthly patterns" : "Reviews, archive, patterns — \(store.displayPrice)/mo")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
-    }
-
-    @ViewBuilder
-    private var proRow: some View {
-        VStack(spacing: 12) {
-            Button {
-                Haptics.tap()
-                if store.isPro {
-                    if let p = PuzzleBank.expertToday() { play(p, expert: true) }
-                } else { showPaywall = true }
-            } label: {
-                proTile(icon: "brain.head.profile", title: "Expert grid",
-                        subtitle: store.isPro ? "A harder 6×6 grid, fresh daily" : "Pro", locked: !store.isPro)
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                Haptics.tap()
-                if store.isPro { showArchive = true } else { showPaywall = true }
-            } label: {
-                proTile(icon: "calendar", title: "Past grids",
-                        subtitle: store.isPro ? "Replay every previous day" : "Pro", locked: !store.isPro)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private func proTile(icon: String, title: String, subtitle: String, locked: Bool) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 20, weight: .semibold)).foregroundStyle(Color.qmAccent).frame(width: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline).foregroundStyle(.primary)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Image(systemName: locked ? "lock.fill" : "chevron.right")
-                .font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
-        }
+        .buttonStyle(.plain)
         .qmCard()
     }
 
-    private func play(_ p: Puzzle, expert: Bool) {
-        Haptics.tap()
-        active = PlaySpec(puzzle: p, isExpert: expert)
+    private var reviewTeaser: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(appModel.pendingReview.count) worr\(appModel.pendingReview.count == 1 ? "y" : "ies") ready for review")
+                .font(.subheadline.weight(.medium))
+            Text("Did they come true? Unlock Pro to find out.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Unlock Reviews") {
+                Haptics.tap()
+                showPaywall = true
+            }
+            .softButton()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .qmCard()
     }
 
-    private var dateHeadline: String {
-        let f = DateFormatter(); f.dateStyle = .full; f.timeStyle = .none
-        return f.string(from: .now)
-    }
+    // MARK: - Force screen
 
-    private func timeString(_ s: Double) -> String {
-        let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
+    private func handleForceScreen() {
+        guard let fs = forceScreen else { return }
+        switch fs {
+        case "grid": showGrid = true
+        case "insights": showInsights = true
+        case "paywall": showPaywall = true
+        case "settings": showSettings = true
+        default: break
+        }
     }
-}
-
-/// Identifies the puzzle being played in the full-screen cover.
-struct PlaySpec: Identifiable {
-    let puzzle: Puzzle
-    let isExpert: Bool
-    var id: String { "\(puzzle.id)-\(isExpert)" }
 }
